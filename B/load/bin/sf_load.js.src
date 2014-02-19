@@ -1,0 +1,173 @@
+var global = this;
+var ws = WScript;
+var wssh = new ActiveXObject("WScript.Shell");
+
+
+function exit(status) {
+  ws.Quit(status);
+}
+
+function print(value) {
+  ws.Echo(value);
+}
+
+function writeFile(filename, content) {
+  var fso = new ActiveXObject("Scripting.FileSystemObject");
+  var ts = fso.CreateTextFile(filename);
+  ts.Write(content);
+  ts.Close();
+}
+
+
+String.prototype.lpad = function(padString, length) {
+  var str = this;
+  while (str.length < length)
+    str = padString + str;
+  return str;
+}
+String.prototype.trim = function() { 
+  return this.replace(/^\s+|\s+$/g, '');
+};
+
+
+
+// загрузка jQuery
+var req = new ActiveXObject("MSXML2.XMLHTTP");
+req.open("GET", "http://code.jquery.com/jquery.min.js", false);
+req.send(null);
+var jQuery = req.responseText;
+
+// подключение jQuery (см. http://log.nissuk.info/2011/07/wsh-jquery-162.html)
+var html = new ActiveXObject("htmlfile");
+html.write("<html></html>");
+var window = html.parentWindow;
+var navigator = window.navigator;
+var document = window.document;
+var location = document.location;
+window.ActiveXObject = ActiveXObject;
+var setTimeout = function(func, delay) { return window.setTimeout(func, delay) };
+eval(jQuery);
+var $ = window.$;
+var jQuery = window.jQuery;
+
+// настройка jQuery
+$.support.cors = true;
+
+// настройка ajax в jQuery
+$.ajaxSetup({ async: false });
+
+
+
+// функция загрузки "сабмита"
+function loadSubmit(submitId) {
+  var content = $.post("http://codeforces.ru/data/submitSource", { submissionId: submitId }).responseText;
+  eval("var data = " + content);
+  return data;
+}
+
+
+// поиск и загрузка подходящего "сабмита"
+function loadCppSubmitByTask(task) {
+  var url = "http://codeforces.ru/problemset/status/" +
+            /^(\d*)/.exec(task)[1] +
+            "/problem/" + 
+            /^\d*(\D)/.exec(task)[1].toUpperCase() +
+            "/page/"
+  var result = false,
+      fail = false;
+  for(var p = 1; !result && !fail; p++) {
+    var content = $.get(url + p).responseText;
+    // убираем все, что до <html>, иначе jQuery не работает
+    content = (/(<html[\s\S]*)/).exec(content)[1];
+    fail = $("table.status-frame-datatable tr:not(.first-row):has(td:eq(4))", content).size() == 0;
+    if (!fail)
+      $("table.status-frame-datatable tr:not(.first-row):has(td:eq(4):contains(GNU C++))", content).each(function() {
+        if (!result) {
+          var submitId = $($(this).children().get(0)).text();
+          var data = loadSubmit(submitId);
+          if (/#include\s*<iostream>/.test(data.source) && /cout\s*<</.test(data.source) &&
+              !/printf\s*\(/.test(data.source))
+            result = data;
+        }
+      });
+  }
+  return result;
+}
+
+
+// функция извлечения из "сабмита" номера задачи
+function getProblemId(data) {
+  print(data.href);
+  return /^\/contest\/(\d*)\//.exec(data.href)[1] + /^\((\w)\)/.exec(data.problemName)[1]
+  
+}
+
+
+// функция обработки "сабмита"
+function processSubmit(data) {
+  // корректировка данных
+  data.problemId = getProblemId(data);
+  data.problemName = /^\(\w\)\s(.*)$/.exec(data.problemName)[1];
+  data.author = data.partyName;
+  data.verdict = /^[^>]*>(?!<)([^<]*)/.exec(data.verdict)[1];
+  data.source = "// contestName: " + data.contestName + "\n" +
+                "// problemId:   " + data.problemId + "\n" +
+                "// problemName: " + data.problemName + "\n" +
+                "// author:      " + data.author + "\n" +
+                "// href:        " + data.href + "\n" +
+                "// verdict:     " + data.verdict + "\n" +
+                "\n" +
+                data.source;
+
+
+  var fso = new ActiveXObject("Scripting.FileSystemObject");
+  // создание пустой папки для решения
+  var folder = ".\\" + data.problemId;
+  if (fso.FolderExists(folder))
+    fso.deleteFolder(folder);
+  fso.CreateFolder(folder);
+
+  // запись решения
+  writeFile(folder + "\\solution.cpp", data.source);
+
+  folder += "\\temp";
+  fso.CreateFolder(folder);
+  for (var i = 1; i <= data.testCount; i++) {
+    // запись входных данных (в temp)
+    var content = data["input#" + i];
+    var filename = folder + "\\input." + ("" + i).lpad("0", 2) + ".txt" + (/.*\.{3}$/.test(content) ? "_" : "");
+    writeFile(filename, content);
+    // запись выходных данных (в temp)
+    var content = data["answer#" + i];
+    var filename = folder + "\\answer." + ("" + i).lpad("0", 2) + ".txt" + (/.*\.{3}$/.test(content) ? "_" : "");
+    writeFile(filename, content);
+  }
+  // запись решения (в temp)
+  writeFile(folder + "\\solution.cpp", data.source);
+}
+
+
+
+if (ws.Arguments.Length == 0 || !ws.Arguments(0) || !/^\d+[a-zA-Z]?$/.test(ws.Arguments(0).trim())) {
+  print("Usage: " + ws.ScriptName + " (<task> | <submitId>)");
+  print("For example: " + ws.ScriptName + " 279A");
+  print("         or: " + ws.ScriptName + " 3267591");
+  exit(1);
+}
+var task = ws.Arguments(0).trim();
+if (/^\d+$/.test(task)) {
+  var submitId = task;
+  var submit = loadSubmit(submitId);
+  if (submit)
+    task = getProblemId(submit)
+}
+else
+  var submit = loadCppSubmitByTask(task);
+
+if (submit) {
+
+  processSubmit(submit);
+  print("Task " + task + " load OK!");
+}
+else
+  print((submitId ? "Submit " + submitId : "Task " + task) + " load error!");
