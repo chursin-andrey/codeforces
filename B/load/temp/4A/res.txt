@@ -1,0 +1,3 @@
+.Testlib Result Number = 0
+.Result name (optional) = ok 
+.Check Comments = single line: 'NO'
